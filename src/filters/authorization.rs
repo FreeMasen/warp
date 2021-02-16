@@ -21,9 +21,9 @@
 use http::header::HeaderValue;
 
 use ::filter::{Filter, One};
-use ::reject::Rejection;
 use super::header;
 use base64;
+use ::reject::{self, Rejection};
 
 /// Represents the Authorization header credentials part of the `Basic` authentication
 /// scheme as defined in RFC 2617 (https://tools.ietf.org/html/rfc2617#section-2)
@@ -61,19 +61,36 @@ pub fn basic() -> impl Filter<Extract=One<BasicCredentials>, Error=Rejection> + 
 }
 
 /// Represents the credentials part of the `Bearer` token authenticationn scheme as
-/// defined in RFC 6750 (https://tools.ietf.org/html/rfc6750#section-2.1)
-#[derive(Debug)]
-pub struct BearerToken(pub String);
+/// defined in RFC 6750 (https://tools.ietf.org/html/rfc6750#section-2.1https://tools.ietf.org/html/rfc6750#section-2.1)
+//#[derive(Debug)]
+//pub struct BearerToken(pub String);
 
 /// Creates a `Filter` that requires an Authorization header with `Bearer` scheme.
 ///
 /// If found, extracts the bearer token, otherwise rejects.
-pub fn bearer() -> impl Filter<Extract=One<BearerToken>, Error=Rejection> + Copy
+pub fn bearer<U,F>(func:F) -> impl Filter<Extract=One<U>, Error=Rejection> + Copy
+    where
+        F: Fn(&str) -> Option<U> + Copy,
+        U: Send,
 {
+//    header::value(&::http::header::AUTHORIZATION, move |val| {
+//        parse("Bearer",val)
+//            .map(|v| func(v.as_ref()))
+//            .map(Ok)
+//        //.unwrap_or_else(|| Err(reject::bad_request()))
+//            .or_else(|| Err(reject::bad_request()))
+//            //.unwrap_or_else(|| Err(reject::bad_request()))
+//    })
+
     header::value(&::http::header::AUTHORIZATION, move |val| {
-        parse("Bearer",val).map(|s: String| {
-            BearerToken(s)
-        })
+        let x = parse("Bearer",val)
+            .and_then(|v| func(v.as_ref()));
+            //.map(Ok)
+            //.unwrap_or_else(|| Err(reject::bad_request()))
+            //.or_else(|| Err(reject::bad_request()))
+        //.unwrap_or_else(|| Err(reject::bad_request()))
+        println!("xxxxxxx");
+        x
     })
 
 }
