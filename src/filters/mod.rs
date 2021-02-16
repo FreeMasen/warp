@@ -5,6 +5,7 @@
 
 pub mod addr;
 pub mod any;
+pub mod authorization;
 pub mod body;
 #[cfg(feature = "compression")]
 pub mod compression;

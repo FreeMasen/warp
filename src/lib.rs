@@ -120,6 +120,7 @@ pub use self::filters::{
     addr,
     // any() function
     any::any,
+    authorization,
     body,
     cookie,
     // cookie() function
