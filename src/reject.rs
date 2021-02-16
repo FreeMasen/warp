@@ -79,6 +79,11 @@ pub(crate) fn missing_cookie(name: &'static str) -> Rejection {
     known(MissingCookie { name })
 }
 
+#[inline]
+pub(crate) fn unauthorized(_scheme: &'static str, _relm: &'static str) -> Rejection {
+    Reason::UNAUTHORIZED.into()
+}
+
 // 405 Method Not Allowed
 #[inline]
 pub(crate) fn method_not_allowed() -> Rejection {

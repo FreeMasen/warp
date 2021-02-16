@@ -45,9 +45,9 @@ pub fn basic() -> impl Filter<Extract=One<BasicCredentials>, Error=Rejection> + 
         parse("Basic", val).and_then(|s: String| {
             match base64::decode(s.as_bytes()) {
                 Ok(ref d) => {
-                    let mut splitN = d.splitn(2, |b| *b == b':');
-                    let u = splitN.next();
-                    let p = splitN.next();
+                    let mut split_n = d.splitn(2, |b| *b == b':');
+                    let u = split_n.next();
+                    let p = split_n.next();
                     u.and_then( |u| {
                         println!("U {:?}",u);
                         p.map( |p| BasicCredentials { user: String::from_utf8_lossy(u).into(), password: String::from_utf8_lossy(p).into() })
