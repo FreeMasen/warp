@@ -32,11 +32,7 @@ use std::convert::Infallible;
 use std::error::Error as StdError;
 use std::fmt;
 
-use http::{
-    self,
-    header::{HeaderValue, CONTENT_TYPE},
-    StatusCode,
-};
+use http::{self, StatusCode, header::{CONTENT_TYPE, HeaderValue, WWW_AUTHENTICATE}};
 use hyper::Body;
 
 pub(crate) use self::sealed::{CombineRejection, IsReject};
@@ -80,8 +76,8 @@ pub(crate) fn missing_cookie(name: &'static str) -> Rejection {
 }
 
 #[inline]
-pub(crate) fn unauthorized(_scheme: &'static str, _relm: &'static str) -> Rejection {
-    Reason::UNAUTHORIZED.into()
+pub(crate) fn unauthorized(scheme: &'static str, realm: &'static str) -> Rejection {
+    known( Unauthorized { scheme, realm })
 }
 
 // 405 Method Not Allowed
@@ -265,6 +261,7 @@ enum_known! {
     MissingConnectionUpgrade(crate::ws::MissingConnectionUpgrade),
     MissingExtension(crate::ext::MissingExtension),
     BodyConsumedMultipleTimes(crate::body::BodyConsumedMultipleTimes),
+    Unauthorized(Unauthorized),
 }
 
 impl Rejection {
@@ -414,6 +411,7 @@ impl Rejections {
                 Known::FileOpenError(_)
                 | Known::MissingExtension(_)
                 | Known::BodyConsumedMultipleTimes(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                Known::Unauthorized(_) => StatusCode::UNAUTHORIZED,
             },
             Rejections::Custom(..) => StatusCode::INTERNAL_SERVER_ERROR,
             Rejections::Combined(ref a, ref b) => preferred(a, b).status(),
@@ -424,11 +422,20 @@ impl Rejections {
         match *self {
             Rejections::Known(ref e) => {
                 let mut res = http::Response::new(Body::from(e.to_string()));
+                
                 *res.status_mut() = self.status();
                 res.headers_mut().insert(
                     CONTENT_TYPE,
                     HeaderValue::from_static("text/plain; charset=utf-8"),
                 );
+                if let Known::Unauthorized(Unauthorized { scheme, realm}) = e {
+                    if let Ok(value) = HeaderValue::from_str(&format!(r#"{} realm="{}""#, scheme, realm)) {
+                        res.headers_mut().insert(
+                            WWW_AUTHENTICATE,
+                            value
+                        );
+                    }
+                }
                 res
             }
             Rejections::Custom(ref e) => {
@@ -576,6 +583,28 @@ impl ::std::fmt::Display for MissingCookie {
 }
 
 impl StdError for MissingCookie {}
+
+#[derive(Debug)]
+pub struct Unauthorized {
+    scheme: &'static str,
+    realm: &'static str,
+}
+
+impl Unauthorized {
+    pub fn scheme(&self) -> &str {
+        self.scheme
+    }
+
+    pub fn realm(&self) -> &str {
+        self.realm
+    }
+}
+
+impl std::fmt::Display for Unauthorized {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Unauthorized request with scheme {} for realm {}", self.scheme(), self.realm())
+    }
+}
 
 mod sealed {
     use super::{Reason, Rejection, Rejections};

@@ -1,11 +1,11 @@
 //! Authorization Filters
 //!
 //! This module provides header filter for a couple of commonly used
-//! HTTP authenticationn schemes, such as `Basic` and `Bearer`. The filters
+//! HTTP authentication schemes, such as `Basic` and `Bearer`. The filters
 //! all extract a scheme specific data structure if an Authorization header
 //! is found and has the proper scheme. Otherwise they reject.
 //!
-//! TODO Rejection should be a 401 with the additional challange properties
+//! TODO Rejection should be a 401 with the additional challenge properties
 //! such as realm.
 //!
 //! ## Bearer token usage
@@ -18,101 +18,37 @@
 //!     });
 //!
 //! ```
-use http::header::HeaderValue;
 
-use ::filter::{Filter, One};
+use std::{convert::Infallible, future};
+
+use headers::{Authorization, authorization::{Basic, Bearer}};
+
+use crate::filter::{Filter, One};
 use super::header;
-use base64;
-use ::reject::{self, Rejection};
-
-/// Represents the Authorization header credentials part of the `Basic` authentication
-/// scheme as defined in RFC 2617 (https://tools.ietf.org/html/rfc2617#section-2)
-#[derive(Debug)]
-pub struct BasicCredentials {
-    /// The authenticating user
-    pub user: String,
-    /// The credentials supplied
-    pub password: String,
-}
+use crate::reject::Rejection;
 
 /// Creates a `Filter` that requires an Authorization header with `Basic` scheme.
 ///
 /// If found, extracts and base64 decodes the Basic credentials otherwise rejects.
-pub fn basic() -> impl Filter<Extract=One<BasicCredentials>, Error=Rejection> + Copy
+pub fn basic(realm: &'static str) -> impl Filter<Extract=One<Basic>, Error=Rejection> + Copy
 {
-    header::value(&::http::header::AUTHORIZATION, move |val| {
-        // TODO: This is a first shot at splitting and isn't proper yet.
-        parse("Basic", val).and_then(|s: String| {
-            match base64::decode(s.as_bytes()) {
-                Ok(ref d) => {
-                    let mut split_n = d.splitn(2, |b| *b == b':');
-                    let u = split_n.next();
-                    let p = split_n.next();
-                    u.and_then( |u| {
-                        println!("U {:?}",u);
-                        p.map( |p| BasicCredentials { user: String::from_utf8_lossy(u).into(), password: String::from_utf8_lossy(p).into() })
-                    })
-                },
-                _ => None
-            }
-        })
+    header::header2().and_then(move |auth: Authorization<Basic>| {
+        future::ready(Result::<_, Infallible>::Ok(auth.0))
+    })
+    .or_else(move |_| {
+        future::ready(Err(crate::reject::unauthorized("Basic", realm)))
     })
 
 }
-
-/// Represents the credentials part of the `Bearer` token authenticationn scheme as
-/// defined in RFC 6750 (https://tools.ietf.org/html/rfc6750#section-2.1https://tools.ietf.org/html/rfc6750#section-2.1)
-//#[derive(Debug)]
-//pub struct BearerToken(pub String);
 
 /// Creates a `Filter` that requires an Authorization header with `Bearer` scheme.
 ///
 /// If found, extracts the bearer token, otherwise rejects.
-pub fn bearer<U,F>(func:F) -> impl Filter<Extract=One<U>, Error=Rejection> + Copy
-    where
-        F: Fn(&str) -> Option<U> + Copy,
-        U: Send,
-{
-//    header::value(&::http::header::AUTHORIZATION, move |val| {
-//        parse("Bearer",val)
-//            .map(|v| func(v.as_ref()))
-//            .map(Ok)
-//        //.unwrap_or_else(|| Err(reject::bad_request()))
-//            .or_else(|| Err(reject::bad_request()))
-//            //.unwrap_or_else(|| Err(reject::bad_request()))
-//    })
-
-    header::value(&::http::header::AUTHORIZATION, move |val| {
-        let x = parse("Bearer",val)
-            .and_then(|v| func(v.as_ref()));
-            //.map(Ok)
-            //.unwrap_or_else(|| Err(reject::bad_request()))
-            //.or_else(|| Err(reject::bad_request()))
-        //.unwrap_or_else(|| Err(reject::bad_request()))
-        println!("xxxxxxx");
-        x
+pub fn bearer(realm: &'static str) -> impl Filter<Extract=One<Bearer>, Error=Rejection> + Copy {
+    header::header2().and_then(move |auth: Authorization<Bearer>| {
+        future::ready(Result::<_, Infallible>::Ok(auth.0))
     })
-
+    .or_else(move |_| {
+        future::ready(Err(crate::reject::unauthorized("Bearer", realm)))
+    })
 }
-
-// Returns credentials part of header value if scheme matches the
-// desired scheme.
-fn parse(scheme: &'static str, value: &HeaderValue) -> Option<String> {
-        value
-        .to_str()
-        .ok()
-        .and_then(|val| {
-            let mut parts = val.split_whitespace();
-            parts.next().and_then(|s| {
-                if s == scheme {
-                    println!("MATCH {}",s);
-                    Some(())
-                } else {
-                    None
-                }
-            }).and_then(|_| {
-                parts.next()
-            }).map(|z: &str| String::from(z))
-        })
-}
-
