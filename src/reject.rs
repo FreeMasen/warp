@@ -34,7 +34,7 @@ use std::fmt;
 
 use http::{
     self,
-    header::{HeaderValue, CONTENT_TYPE},
+    header::{HeaderValue, CONTENT_TYPE, WWW_AUTHENTICATE},
     StatusCode,
 };
 use hyper::Body;
@@ -104,6 +104,18 @@ pub(crate) fn payload_too_large() -> Rejection {
 #[inline]
 pub(crate) fn unsupported_media_type() -> Rejection {
     known(UnsupportedMediaType { _p: () })
+}
+
+/// 401 with challenge
+#[inline]
+pub(crate) fn unauthorized_challenge(scheme: &'static str, realm: &'static str) -> Rejection {
+    known(crate::filters::auth::Challenge { scheme, realm })
+}
+
+/// 403
+#[inline]
+pub(crate) fn forbidden() -> Rejection {
+    known(Forbidden { _p: () })
 }
 
 /// Rejects a request with a custom cause.
@@ -260,6 +272,8 @@ enum_known! {
     MissingConnectionUpgrade(crate::ws::MissingConnectionUpgrade),
     MissingExtension(crate::ext::MissingExtension),
     BodyConsumedMultipleTimes(crate::body::BodyConsumedMultipleTimes),
+    Unauthorized(crate::filters::auth::Challenge),
+    Forbidden(Forbidden),
 }
 
 impl Rejection {
@@ -391,8 +405,8 @@ impl fmt::Debug for Reason {
 
 impl Rejections {
     fn status(&self) -> StatusCode {
-        match *self {
-            Rejections::Known(ref k) => match *k {
+        match self {
+            Rejections::Known(k) => match k {
                 Known::MethodNotAllowed(_) => StatusCode::METHOD_NOT_ALLOWED,
                 Known::InvalidHeader(_)
                 | Known::MissingHeader(_)
@@ -409,6 +423,8 @@ impl Rejections {
                 Known::FileOpenError(_)
                 | Known::MissingExtension(_)
                 | Known::BodyConsumedMultipleTimes(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                Known::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+                Known::Forbidden(_) => StatusCode::FORBIDDEN,
             },
             Rejections::Custom(..) => StatusCode::INTERNAL_SERVER_ERROR,
             Rejections::Combined(ref a, ref b) => preferred(a, b).status(),
@@ -416,7 +432,24 @@ impl Rejections {
     }
 
     fn into_response(&self) -> crate::reply::Response {
-        match *self {
+        match self {
+            Rejections::Known(Known::Unauthorized(crate::filters::auth::Challenge { realm, scheme})) => {
+                let mut res = http::Response::new(Body::from("Unauthorized".to_string()));
+                *res.status_mut() = self.status();
+                if let Ok(realm_header) = HeaderValue::from_str(&format!(r#"{} realm="{}""#, scheme, realm)) {
+                    res.headers_mut().insert(
+                        WWW_AUTHENTICATE,
+                        realm_header,
+                    );
+                } else {
+                    *res.status_mut() = StatusCode::FORBIDDEN;
+                }
+                res.headers_mut().insert(
+                    CONTENT_TYPE,
+                    HeaderValue::from_static("text/plain; charset=utf-8"),
+                );
+                res
+            }
             Rejections::Known(ref e) => {
                 let mut res = http::Response::new(Body::from(e.to_string()));
                 *res.status_mut() = self.status();
@@ -507,6 +540,11 @@ unit_error! {
 unit_error! {
     /// The request's content-type is not supported
     pub UnsupportedMediaType: "The request's content-type is not supported"
+}
+
+unit_error! {
+    /// HTTP method not allowed
+    pub Forbidden: "Forbidden"
 }
 
 /// Missing request header
