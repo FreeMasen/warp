@@ -433,14 +433,16 @@ impl Rejections {
 
     fn into_response(&self) -> crate::reply::Response {
         match self {
-            Rejections::Known(Known::Unauthorized(crate::filters::auth::Challenge { realm, scheme})) => {
+            Rejections::Known(Known::Unauthorized(crate::filters::auth::Challenge {
+                realm,
+                scheme,
+            })) => {
                 let mut res = http::Response::new(Body::from("Unauthorized".to_string()));
                 *res.status_mut() = self.status();
-                if let Ok(realm_header) = HeaderValue::from_str(&format!(r#"{} realm="{}""#, scheme, realm)) {
-                    res.headers_mut().insert(
-                        WWW_AUTHENTICATE,
-                        realm_header,
-                    );
+                if let Ok(realm_header) =
+                    HeaderValue::from_str(&format!(r#"{} realm="{}""#, scheme, realm))
+                {
+                    res.headers_mut().insert(WWW_AUTHENTICATE, realm_header);
                 } else {
                     *res.status_mut() = StatusCode::FORBIDDEN;
                 }

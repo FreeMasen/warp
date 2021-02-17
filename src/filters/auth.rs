@@ -3,21 +3,25 @@ use std::sync::Arc;
 
 use headers::{authorization::Basic, authorization::Bearer};
 
-use crate::{Filter, Rejection, Reply, filter::WrapSealed, reject::CombineRejection};
+use crate::{filter::WrapSealed, reject::CombineRejection, Filter, Rejection, Reply};
 use internal::AuthFilter;
 
 /// Wrap routes with basic authentication
-pub fn basic<A: Authorizer+'static>(realm: &'static str, authorizer: A) -> Authed {
+pub fn basic<A: Authorizer + 'static>(realm: &'static str, authorizer: A) -> Authed {
     auth("Basic", realm, authorizer)
 }
 
 /// Wrap routes with bearer authentication
-pub fn bearer<A: Authorizer+'static>(realm: &'static str, authorizer: A) -> Authed {
+pub fn bearer<A: Authorizer + 'static>(realm: &'static str, authorizer: A) -> Authed {
     auth("Bearer", realm, authorizer)
 }
 
 /// Authentication middleware
-pub fn auth<A: Authorizer+'static>(scheme: &'static str, realm: &'static str, authorizer: A) -> Authed {
+pub fn auth<A: Authorizer + 'static>(
+    scheme: &'static str,
+    realm: &'static str,
+    authorizer: A,
+) -> Authed {
     Authed {
         scheme,
         realm,
@@ -35,9 +39,12 @@ where
     type Wrapped = AuthFilter<F>;
 
     fn wrap(&self, inner: F) -> Self::Wrapped {
-        
-
-        AuthFilter { inner, authorizer: self.authorizer.clone(), scheme: self.scheme, realm: self.realm }
+        AuthFilter {
+            inner,
+            authorizer: self.authorizer.clone(),
+            scheme: self.scheme,
+            realm: self.realm,
+        }
     }
 }
 
@@ -50,8 +57,7 @@ pub struct Authed {
 
 impl std::fmt::Debug for Authed {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("Authed")
-            .finish()
+        f.debug_struct("Authed").finish()
     }
 }
 
@@ -94,7 +100,10 @@ mod internal {
     use std::task::{Context, Poll};
 
     use futures::{future, ready, TryFuture};
-    use headers::{Authorization, HeaderValue, authorization::{Basic, Bearer}};
+    use headers::{
+        authorization::{Basic, Bearer},
+        Authorization, HeaderValue,
+    };
     use pin_project::pin_project;
 
     use crate::filter::{Filter, FilterBase, Internal, One};
@@ -127,28 +136,33 @@ mod internal {
     {
         type Extract = One<Wrapped<F::Extract>>;
         type Error = <F::Error as CombineRejection<Rejection>>::One;
-        type Future = future::Either<future::Ready<Result<Self::Extract, Self::Error>>, WrappedFuture<F::Future>>;
+        type Future = future::Either<
+            future::Ready<Result<Self::Extract, Self::Error>>,
+            WrappedFuture<F::Future>,
+        >;
 
         fn filter(&self, _: Internal) -> Self::Future {
             use headers::HeaderMapExt;
             let validated = route::with(|route| {
-                    let hv = route.headers().get(http::header::AUTHORIZATION).cloned();
-                    if let Ok(Some(header)) = route.headers().typed_try_get::<Authorization<Basic>>() {
-                        Some((self.authorizer.basic(&header.0), hv))
-                    } else if let Ok(Some(header)) = route.headers().typed_try_get::<Authorization<Bearer>>() {
-                        Some((self.authorizer.bearer(&header.0), hv))
-                    } else {
-                        None
-                    }
-                });
+                let hv = route.headers().get(http::header::AUTHORIZATION).cloned();
+                if let Ok(Some(header)) = route.headers().typed_try_get::<Authorization<Basic>>() {
+                    Some((self.authorizer.basic(&header.0), hv))
+                } else if let Ok(Some(header)) =
+                    route.headers().typed_try_get::<Authorization<Bearer>>()
+                {
+                    Some((self.authorizer.bearer(&header.0), hv))
+                } else {
+                    None
+                }
+            });
             match validated {
                 Some((Ok(_), auth)) => {
                     let wrapped = WrappedFuture {
                         inner: self.inner.filter(Internal),
-                        wrapped: (self.authorizer.clone(), auth.unwrap().clone())
+                        wrapped: (self.authorizer.clone(), auth.unwrap().clone()),
                     };
                     future::Either::Right(wrapped)
-                },
+                }
                 Some((Err(_), _)) => {
                     let rejection = crate::reject::forbidden();
                     future::Either::Left(future::err(rejection.into()))
@@ -201,14 +215,9 @@ mod internal {
     impl<F> Future for WrappedFuture<F>
     where
         F: TryFuture,
-        F::Error: CombineRejection<Rejection>, 
+        F::Error: CombineRejection<Rejection>,
     {
-        type Output = Result<
-            One<Wrapped<F::Ok>>,
-            <F::Error as CombineRejection<Rejection>>::One,
-        >;
-        
-        
+        type Output = Result<One<Wrapped<F::Ok>>, <F::Error as CombineRejection<Rejection>>::One>;
 
         fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
             let pin = self.project();
@@ -220,7 +229,7 @@ mod internal {
                         inner,
                         header: header.clone(),
                     },);
-                    
+
                     Poll::Ready(Ok(item))
                 }
                 Err(err) => Poll::Ready(Err(err.into())),
