@@ -1,27 +1,30 @@
 //! Auth Filters
 use std::sync::Arc;
 
+use futures::Future;
 use headers::{authorization::Basic, authorization::Bearer};
 
 use crate::{filter::WrapSealed, reject::CombineRejection, Filter, Rejection, Reply};
 use internal::AuthFilter;
 
+
+
 /// Wrap routes with basic authentication
-pub fn basic<A: Authorizer + 'static>(realm: &'static str, authorizer: A) -> Authed {
+pub fn basic<T: Future<Output = Result<(), ()>>, A: Authorizer<T> + 'static>(realm: &'static str, authorizer: A) -> Authed<T> {
     auth("Basic", realm, authorizer)
 }
 
 /// Wrap routes with bearer authentication
-pub fn bearer<A: Authorizer + 'static>(realm: &'static str, authorizer: A) -> Authed {
+pub fn bearer<T: Future<Output = Result<(), ()>>, A: Authorizer<T> + 'static>(realm: &'static str, authorizer: A) -> Authed<T> {
     auth("Bearer", realm, authorizer)
 }
 
 /// Authentication middleware
-pub fn auth<A: Authorizer + 'static>(
+pub fn auth<T: Future<Output = Result<(), ()>>, A: Authorizer<T> + 'static>(
     scheme: &'static str,
     realm: &'static str,
     authorizer: A,
-) -> Authed {
+) -> Authed<T> {
     Authed {
         scheme,
         realm,
@@ -29,14 +32,14 @@ pub fn auth<A: Authorizer + 'static>(
     }
 }
 
-impl<F> WrapSealed<F> for Authed
+impl<F, A> WrapSealed<F> for Authed<A>
 where
     F: Filter + Clone + Send + Sync + 'static,
     F::Extract: Reply,
     F::Error: CombineRejection<Rejection>,
     <F::Error as CombineRejection<Rejection>>::One: CombineRejection<Rejection>,
 {
-    type Wrapped = AuthFilter<F>;
+    type Wrapped = AuthFilter<F, A>;
 
     fn wrap(&self, inner: F) -> Self::Wrapped {
         AuthFilter {
@@ -49,13 +52,13 @@ where
 }
 
 /// Authentication middleware
-pub struct Authed {
+pub struct Authed<F> {
     scheme: &'static str,
     realm: &'static str,
-    authorizer: Arc<dyn Authorizer>,
+    authorizer: Arc<dyn Authorizer<F>>,
 }
 
-impl std::fmt::Debug for Authed {
+impl<F> std::fmt::Debug for Authed<F> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_struct("Authed").finish()
     }
@@ -82,14 +85,15 @@ impl std::fmt::Display for Challenge {
 }
 
 /// A trait that defines user authorization
-pub trait Authorizer: Send + Sync {
+pub trait Authorizer<F>: Send + Sync 
+where F: Future<Output = Result<(), ()>>, {
     /// Authorize this request's bearer token
-    fn bearer(&self, _cred: &Bearer) -> Result<(), ()> {
-        Err(())
+    fn bearer(&self, _cred: &Bearer) -> F {
+        futures::future::err(())
     }
     /// Authorize this request's basic credentials
-    fn basic(&self, _cred: &Basic) -> Result<(), ()> {
-        Err(())
+    fn basic(&self, _cred: &Basic) -> F {
+        futures::future::err(())
     }
 }
 
@@ -113,13 +117,13 @@ mod internal {
     use super::Authorizer;
 
     #[derive(Clone)]
-    pub struct AuthFilter<F> {
-        pub(super) authorizer: Arc<dyn Authorizer>,
+    pub struct AuthFilter<F, A> {
+        pub(super) authorizer: Arc<dyn Authorizer<A>>,
         pub(super) scheme: &'static str,
         pub(super) realm: &'static str,
         pub(super) inner: F,
     }
-    impl<F> std::fmt::Debug for AuthFilter<F> {
+    impl<F, A> std::fmt::Debug for AuthFilter<F, A> {
         fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
             f.debug_struct("AuthFilter")
                 .field("scheme", &self.scheme)
@@ -127,18 +131,18 @@ mod internal {
                 .finish()
         }
     }
-    impl<F> FilterBase for AuthFilter<F>
+    impl<F, A> FilterBase for AuthFilter<F, A>
     where
         F: Filter,
         F::Extract: Send,
         F::Future: Future,
         F::Error: CombineRejection<Rejection>,
     {
-        type Extract = One<Wrapped<F::Extract>>;
+        type Extract = One<Wrapped<F::Extract, A>>;
         type Error = <F::Error as CombineRejection<Rejection>>::One;
         type Future = future::Either<
             future::Ready<Result<Self::Extract, Self::Error>>,
-            WrappedFuture<F::Future>,
+            WrappedFuture<F::Future, A>,
         >;
 
         fn filter(&self, _: Internal) -> Self::Future {
@@ -174,13 +178,13 @@ mod internal {
             }
         }
     }
-    pub struct Wrapped<R> {
-        authorizer: Arc<dyn Authorizer>,
+    pub struct Wrapped<R, A> {
+        authorizer: Arc<dyn Authorizer<A>>,
         inner: R,
         header: HeaderValue,
     }
 
-    impl<F> std::fmt::Debug for Wrapped<F> {
+    impl<F, A> std::fmt::Debug for Wrapped<F, A> {
         fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
             f.debug_struct("Wrapped")
                 .field("header", &self.header)
@@ -188,7 +192,7 @@ mod internal {
         }
     }
 
-    impl<R> crate::reply::Reply for Wrapped<R>
+    impl<R, A> crate::reply::Reply for Wrapped<R, A>
     where
         R: crate::reply::Reply,
     {
@@ -198,13 +202,13 @@ mod internal {
     }
 
     #[pin_project]
-    pub struct WrappedFuture<F> {
+    pub struct WrappedFuture<F, A> {
         #[pin]
         inner: F,
-        wrapped: (Arc<dyn Authorizer>, HeaderValue),
+        wrapped: (Arc<dyn Authorizer<A>>, HeaderValue),
     }
 
-    impl<F> std::fmt::Debug for WrappedFuture<F> {
+    impl<F, A> std::fmt::Debug for WrappedFuture<F, A> {
         fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
             f.debug_struct("WrappedFuture")
                 .field("header", &self.wrapped.1)
@@ -212,12 +216,12 @@ mod internal {
         }
     }
 
-    impl<F> Future for WrappedFuture<F>
+    impl<F, A> Future for WrappedFuture<F, A>
     where
         F: TryFuture,
         F::Error: CombineRejection<Rejection>,
     {
-        type Output = Result<One<Wrapped<F::Ok>>, <F::Error as CombineRejection<Rejection>>::One>;
+        type Output = Result<One<Wrapped<F::Ok, A>>, <F::Error as CombineRejection<Rejection>>::One>;
 
         fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
             let pin = self.project();
