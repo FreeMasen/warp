@@ -159,6 +159,7 @@ mod internal {
         pub(super) realm: &'static str,
         pub(super) inner: F,
     }
+
     impl<F, A> std::fmt::Debug for AuthFilter<F, A> {
         fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
             f.debug_struct("AuthFilter")
@@ -178,7 +179,7 @@ mod internal {
         A: Send + Sync + Future<Output = Result<(), Rejection>>,
     {
         type Extract =
-            One<crate::generic::Either<One<WrappedPendingFuture<F::Extract, A>>, F::Extract>>;
+            One<future::Either<One<WrappedPendingFuture<F::Extract, A>>, F::Extract>>;
         type Error = <F::Error as CombineRejection<Rejection>>::One;
         type Future = future::Either<
             future::Ready<Result<Self::Extract, Self::Error>>,
@@ -191,6 +192,8 @@ mod internal {
             });
             match header {
                 Some(header) => {
+                    // if a header is provided, we start the user's callback future
+                    // with the header value provided
                     future::Either::Right(
                     WrappedPendingFuture {
                         inner: self.inner,
@@ -199,8 +202,9 @@ mod internal {
                     })
                 }
                 None => {
+                    // If no header is provided, we return the challenge response
                     let rejection = crate::reject::unauthorized_challenge(self.scheme, self.realm);
-                    future::Either::Left(future::err(rejection.into()))
+                    future::Either::Left(future::ok(rejection.into()))
                 }
             }
         }
@@ -257,6 +261,8 @@ mod internal {
             let pin = self.project();
             match ready!(pin.auth.try_poll(cx)) {
                 Ok(_) => {
+                    // If the user's auth callback/future returns Ok(()), we then move on to the
+                    // inner filter
                     let (authorizer, header) = pin.wrapped;
                     let item = (WrappedAuthedFuture {
                         wrapped: (authorizer.clone(), header.clone()),
