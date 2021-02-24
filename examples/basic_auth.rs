@@ -1,30 +1,16 @@
 #![deny(warnings)]
 
-use headers::authorization::Basic;
-use warp::auth::{basic, Authorizer};
+use warp::auth::{basic, AuthHeader};
 use warp::Filter;
-
+use tokio::sync::RwLock;
 use std::{
     collections::HashMap,
-    sync::{Arc, RwLock},
+    sync::Arc,
 };
 
+#[derive(Clone)]
 struct Auth {
     users: Arc<RwLock<HashMap<&'static str, &'static str>>>,
-}
-
-impl Authorizer for Auth {
-    fn basic(&self, basic: &Basic) -> Result<(), ()> {
-        let lock = self.users.read().map_err(|_e| {
-            println!("Locked RwLock from same thread twice....");
-        })?;
-        if let Some(pw) = lock.get(basic.username()) {
-            if *pw == basic.password() {
-                return Ok(());
-            }
-        }
-        Err(())
-    }
 }
 
 #[tokio::main]
@@ -42,7 +28,16 @@ async fn main() {
     // These files will only be available with a valid auth header
     let secret_examples = warp::path("ex")
         .and(warp::fs::dir("./examples/"))
-        .with(basic("MyRealm", auth));
+        .with(basic("MyRealm", move |header| async move {
+            if let AuthHeader::Basic(basic) = header {
+                if let Some(pw) = user.lock().await.get(basic.username()) {
+                    if pw == basic.password() {
+                        return Ok(())
+                    }
+                }
+            }
+            Err(warp::reject::forbidden())
+        }));
 
     // GET / => README.md
     // GET /ex/... => ./examples/..
